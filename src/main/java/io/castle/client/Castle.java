@@ -1,0 +1,384 @@
+package io.castle.client;
+
+import com.google.common.collect.ImmutableMap;
+import com.google.common.hash.HashFunction;
+import io.castle.client.api.CastleApi;
+import io.castle.client.internal.CastleApiImpl;
+import io.castle.client.internal.config.CastleConfiguration;
+import io.castle.client.internal.config.CastleConfigurationBuilder;
+import io.castle.client.internal.config.CastleSdkInternalConfiguration;
+import io.castle.client.internal.json.CastleGsonModel;
+import io.castle.client.internal.utils.CastleContextBuilder;
+import io.castle.client.internal.utils.Webhook;
+import io.castle.client.model.CastleResponse;
+import io.castle.client.model.CastleSdkConfigurationException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import jakarta.servlet.http.HttpServletRequest;
+
+/**
+ * Creates an instance of the Castle SDK.
+ * <p>
+ * Initialize once with {@link #initialize()} or {@link #initialize(CastleConfiguration)},
+ * then call {@link #client()} or {@link #onRequest(HttpServletRequest)} to send requests.
+ * {@code Castle} implements {@link AutoCloseable}; call {@link #close()} to release the HTTP client.
+ * <p>
+ * Static method {@link #setSingletonInstance(Castle)} can be called to set a global instance of the SDK.
+ * Once set, {@link #instance()} returns that instance.
+ */
+public class Castle implements AutoCloseable {
+    public static final String URL_PRIVACY = "/v1/privacy/";
+    public static final String URL_RISK = "/v1/risk";
+    public static final String URL_FILTER = "/v1/filter";
+    public static final String URL_LOG = "/v1/log";
+    public static final String URL_EVENTS = "/v1/events";
+
+    /**
+     * Header used by Castle to sign webhook payloads.
+     */
+    public static final String WEBHOOK_SIGNATURE_HEADER = "X-Castle-Signature";
+
+    public static final String URL_LISTS = "/v1/lists";
+    public static final String URL_LISTS_ID = "/v1/lists/%s";
+    public static final String URL_LISTS_SEARCH = "/v1/lists/query";
+
+    public static final String URL_LISTS_ITEMS = "/v1/lists/%s/items";
+    public static final String URL_LISTS_ITEMS_BATCH = "/v1/lists/%s/items/batch";
+    public static final String URL_LISTS_ITEMS_SEARCH = "/v1/lists/%s/items/query";
+    public static final String URL_LISTS_ITEMS_COUNT = "/v1/lists/%s/items/count";
+    public static final String URL_LISTS_ITEMS_UPDATE = "/v1/lists/%s/items/%s";
+    public static final String URL_LISTS_ITEMS_GET = "/v1/lists/%s/items/%s";
+    public static final String URL_LISTS_ITEMS_ARCHIVE = "/v1/lists/%s/items/%s/archive";
+    public static final String URL_LISTS_ITEMS_UNARCHIVE = "/v1/lists/%s/items/%s/unarchive";
+
+    public static final String KEY_EVENT = "event";
+    public static final String KEY_USER = "user";
+    public static final String KEY_STATUS = "status";
+    public static final String KEY_FINGERPRINT = "fingerprint";
+    public static final String KEY_REGISTERED_AT = "registered_at";
+    public static final String KEY_CREATED_AT = "created_at";
+    public static final String KEY_PROPERTIES = "properties";
+    public static final String KEY_REQUEST_TOKEN = "request_token";
+    public static final String KEY_CONTEXT = "context";
+
+    // Context
+    public static final String KEY_IP = "ip";
+    public static final String KEY_HEADERS = "headers";
+
+    // User
+    public static final String KEY_ID = "id";
+    public static final String KEY_USER_ID = "user_id";
+    public static final String KEY_NAME = "name";
+    public static final String KEY_EMAIL = "email";
+    public static final String KEY_TRAITS = "traits";
+
+    public static final Logger logger = LoggerFactory.getLogger(Castle.class);
+
+    private final CastleSdkInternalConfiguration internalConfiguration;
+
+    /**
+     * Public constructor for creating an instance of the SDK
+     * <p>
+     * Please use the static setSingletonInstance() and instance() methods to set and get an SDK instance.
+     *
+     * @param internalConfiguration a test internal configuration for the SDK
+     */
+    public Castle(CastleSdkInternalConfiguration internalConfiguration) {
+        this.internalConfiguration = internalConfiguration;
+    }
+
+    private static Castle instance;
+
+    /**
+     * Gets the SDK singleton instance.
+     *
+     * @return the singleton instance of {@code this}
+     * @throws IllegalStateException when the SDK has not been properly initialized
+     */
+    public static Castle instance() throws IllegalStateException {
+        if (instance == null) {
+            throw new IllegalStateException("Castle SDK must be initialized. Call `Castle.initialize()` first");
+        }
+        return instance;
+    }
+
+    /**
+     * Sets the SDK singleton instance.
+     *
+     * @param sdk configured instance of the sdk
+     */
+    public static void setSingletonInstance(Castle sdk) {
+        if (instance == null) {
+            instance = sdk;
+        }
+    }
+
+    /**
+     * Creates a API client instance for sending a request
+     * @return A new instance of the API client {@code CastleApiImpl}
+     * @throws IllegalStateException when the SDK has not been properly initialized
+     */
+    public CastleApi client() throws IllegalStateException {
+        return buildApiClient(false);
+    }
+
+    /**
+     * Creates an API client instance for sending a request.
+     * The {@code doNotTrack} flag is stored on the returned client and is not read by
+     * {@code risk}, {@code filter}, {@code log}, or other API methods.
+     *
+     * @param doNotTrack tracking flag stored on the returned client
+     * @return A new instance of the API client {@code CastleApiImpl}
+     * @throws IllegalStateException when the SDK has not been properly initialized
+     */
+    public CastleApi client(boolean doNotTrack) throws IllegalStateException {
+        return buildApiClient(doNotTrack);
+    }
+
+    /**
+     * Verifies the SDK's internalConfiguration and initializes its internal Configuration.
+     * @return A new instance of the sdk {@code Castle}
+     * @throws CastleSdkConfigurationException if the provided settings in the environment of classpath have invalid values
+     */
+    public static Castle verifySdkConfigurationAndInitialize() throws CastleSdkConfigurationException {
+        return initializeSDK();
+    }
+
+
+    private static synchronized Castle initializeSDK() throws CastleSdkConfigurationException {
+        CastleSdkInternalConfiguration loadedConfig = CastleSdkInternalConfiguration.getInternalConfiguration();
+        return new Castle(loadedConfig);
+    }
+
+    /**
+     * Initialize and configure the Castle SDK using a configuration object
+     *
+     * @param config CastleConfiguration object
+     * @return A new instance of the sdk {@code Castle}
+     * @throws CastleSdkConfigurationException Configuration options missing or
+     *   invalid
+     */
+    public static synchronized Castle initialize(CastleConfiguration config) throws CastleSdkConfigurationException {
+        return new Castle(CastleSdkInternalConfiguration.buildFromConfiguration(config));
+    }
+
+    /**
+     * Initialize the Castle SDK using default settings and variables from ENV
+     *
+     * @return A new instance of the sdk {@code Castle}
+     * @throws CastleSdkConfigurationException Configuration options missing or
+     *   invalid
+     */
+    public static Castle initialize() throws CastleSdkConfigurationException {
+        return initialize(configurationBuilder().build());
+    }
+
+    /**
+     * Initialize the Castle SDK using only the API secret key
+     * @param  secret                          API Secret
+     * @return A new instance of the sdk {@code Castle}
+     * @throws CastleSdkConfigurationException Configuration options missing or
+     *   invalid
+     */
+    public static Castle initialize(String secret) throws CastleSdkConfigurationException {
+        return initialize(configurationBuilder().apiSecret(secret).build());
+    }
+
+    public static CastleConfigurationBuilder configurationBuilder() {
+        return CastleSdkInternalConfiguration.builderFromConfigurationLoader();
+    }
+
+    /**
+     * Returns a new builder object for constructing a CastleContext
+     * @return Return CatleContextBuilder object
+     */
+    public CastleContextBuilder contextBuilder() {
+        return buildContextBuilder();
+    }
+
+    /**
+     * Create a new instance of a request context builder
+     * @return a new instance of {@code CastleContextBuilder}
+     */
+    public CastleContextBuilder buildContextBuilder() {
+        return new CastleContextBuilder(
+            getSdkConfiguration(),
+            getGsonModel()
+        );
+    }
+
+    public CastleApi buildApiClient() {
+        return buildApiClient(false);
+    }
+
+    public CastleApi buildApiClient(boolean doNotTrack) {
+        return new CastleApiImpl(internalConfiguration, doNotTrack);
+    }
+
+    /**
+     * Creates an API client and extracts servlet headers and IP into an internal context object.
+     * {@code risk}, {@code filter}, and {@code log} send the payload as given; set {@code context} on the payload.
+     *
+     * @param request The request for data extraction
+     * @return a API reference to make backend calls to the castle.io rest api.
+     */
+    public CastleApi onRequest(HttpServletRequest request) {
+        return onRequest(request, false);
+    }
+
+    /**
+     * Creates an API client and extracts servlet headers and IP into an internal context object.
+     * {@code risk}, {@code filter}, and {@code log} send the payload as given; set {@code context} on the payload.
+     * The {@code doNotTrack} flag is stored on the returned client and is not read by those methods.
+     *
+     * @param request    The request for data extraction
+     * @param doNotTrack tracking flag stored on the returned client
+     * @return a API reference to make backend calls to the castle.io rest api.
+     */
+    public CastleApi onRequest(HttpServletRequest request, boolean doNotTrack) {
+        return new CastleApiImpl(request, doNotTrack, internalConfiguration);
+    }
+
+    /**
+     * Gets the SDK's configuration stored in an instance of {@code CastleConfiguration}.
+     *
+     * @return the SDK's configuration
+     */
+    public CastleConfiguration getSdkConfiguration() {
+        return internalConfiguration.getConfiguration();
+    }
+
+    /**
+     * Get Gson model for serialization and deserialization
+     * @return the Gson model
+     */
+    private CastleGsonModel getGsonModel() {
+        return internalConfiguration.getModel();
+    }
+
+    /**
+     * Package accessible method for testing purposes.
+     *
+     * @return the internal sdk configuration
+     */
+    CastleSdkInternalConfiguration getInternalConfiguration() {
+        return internalConfiguration;
+    }
+
+    /**
+     * Calculate the secure userId HMAC using the internal API Secret.
+     * @param userId raw user Id
+     * @return the HMAC of the userId
+     */
+    public String secureUserID(String userId) {
+        HashFunction hashFunction = internalConfiguration.getSecureHashFunction();
+        return hashFunction.hashString(userId,com.google.common.base.Charsets.UTF_8).toString();
+    }
+
+    /**
+     * Verifies a Castle webhook signature against the raw request body.
+     * <p>
+     * Castle signs every webhook with an HMAC-SHA256 of the raw request body using
+     * the account API secret, base64 encoded and sent in the
+     * {@code X-Castle-Signature} header.
+     *
+     * @param signature the value of the {@code X-Castle-Signature} header
+     * @param body      the raw request body bytes
+     * @return {@code true} when the signature matches the computed signature
+     */
+    public boolean verifyWebhookSignature(String signature, byte[] body) {
+        return Webhook.verifySignature(internalConfiguration.getConfiguration().getApiSecret(), body, signature);
+    }
+
+    /**
+     * Verifies a Castle webhook signature for the given servlet request.
+     * <p>
+     * The signature is read from the {@code X-Castle-Signature} header and verified
+     * against the supplied raw request body bytes.
+     *
+     * @param request the incoming webhook request
+     * @param body    the raw request body bytes
+     * @return {@code true} when the signature matches the computed signature
+     */
+    public boolean verifyWebhookSignature(HttpServletRequest request, byte[] body) {
+        if (request == null) {
+            return false;
+        }
+        return verifyWebhookSignature(request.getHeader(WEBHOOK_SIGNATURE_HEADER), body);
+    }
+
+    /**
+     * Make a GET request to a Castle API endpoint such as /v1/lists
+     *
+     * @param path api path
+     * @return a decoded json response
+     */
+    public CastleResponse get(String path) {
+        return client().get(path);
+    }
+
+    /**
+     * Make a POST request to a Castle API endpoint such as /v1/risk
+     *
+     * @param path api path
+     * @param payload request payload
+     * @return a decoded json response
+     */
+    public CastleResponse post(String path, ImmutableMap<Object, Object> payload) {
+        return client().post(path, payload);
+    }
+    /**
+     * Make a PUT request to a Castle API endpoint such as /v1/lists/{id}
+     *
+     * @param path api path
+     * @return a decoded json response
+     */
+    public CastleResponse put(String path) {
+        return client().put(path);
+    }
+
+    /**
+     * Make a PUT request to a Castle API endpoint such as /v1/lists/{id}
+     *
+     * @param path api path
+     * @param payload request payload
+     * @return a decoded json response
+     */
+    public CastleResponse put(String path, ImmutableMap<Object, Object> payload) {
+        return client().put(path, payload);
+    }
+
+    /**
+     * Make a DELETE request to a Castle API endpoint such as /v1/lists/{id}
+     *
+     * @param path api path
+     * @return a decoded json response
+     */
+    public CastleResponse delete(String path) {
+        return client().delete(path);
+    }
+
+    /**
+     * Make a DELETE request to a Castle API endpoint such as /v1/lists/{id}
+     *
+     * @param path api path
+     * @param payload request payload
+     * @return a decoded json response
+     */
+    public CastleResponse delete(String path, ImmutableMap<Object, Object> payload) {
+        return client().delete(path, payload);
+    }
+
+    /**
+     * Releases the HTTP dispatcher and connection pool used by this instance.
+     * When this instance is the SDK singleton, {@link #instance()} is cleared.
+     */
+    @Override
+    public void close() {
+        internalConfiguration.close();
+        if (instance == this) {
+            instance = null;
+        }
+    }
+}

@@ -1,0 +1,125 @@
+package io.castle.client.internal.config;
+
+import io.castle.client.internal.backend.CastleBackendProvider;
+import io.castle.client.model.CastleRuntimeException;
+
+import java.util.List;
+
+/**
+ * Application level settings used by the SDK singleton.
+ * <p>
+ * Configuration values will be loaded from the environment or from the class path by a call to
+ * {@link ConfigurationLoader#loadConfiguration()}.
+ */
+public class CastleConfiguration {
+
+    /**
+     * Endpoint of the Castle API.
+     */
+    private final String apiBaseUrl;
+
+    /**
+     * Timeout in milliseconds applied to connect, read, and write.
+     */
+    private final int timeout;
+
+    /**
+     * List of headers that will get passed to the {@code CastleContext} unless they are denyListed.
+     */
+    private final List<String> allowListHeaders;
+
+    /**
+     * List of headers that will never get passed to the {@code CastleContext} when built from an HTTP request.
+     */
+    private final List<String> denyListHeaders;
+
+    /**
+     * Secret associated to a Castle account.
+     */
+    private final String apiSecret;
+
+    /**
+     * Identifier used for authentication purposes for requests to the Castle API.
+     */
+    private final String castleAppId;
+
+    /**
+     * HTTP layer that will be used for calls to the Castle API
+     */
+    private final CastleBackendProvider backendProvider;
+
+    /**
+     * Flag to add logging information on HTTP backend.
+     */
+    private final boolean logHttpRequests;
+
+    private final List<String> ipHeaders;
+
+    /**
+     * Max number of simultaneous requests to Castle
+     */
+    private final int maxRequests;
+
+    public CastleConfiguration(String apiBaseUrl, int timeout, List<String> allowListHeaders, List<String> denyListHeaders, String apiSecret, String castleAppId, CastleBackendProvider backendProvider, boolean logHttpRequests, List<String> ipHeaders, Integer maxRequests) {
+        this.apiBaseUrl = apiBaseUrl;
+        this.timeout = timeout;
+        this.allowListHeaders = allowListHeaders;
+        this.denyListHeaders = denyListHeaders;
+        this.apiSecret = apiSecret;
+        this.castleAppId = castleAppId;
+        this.backendProvider = backendProvider;
+        this.logHttpRequests = logHttpRequests;
+        this.ipHeaders = ipHeaders;
+        this.maxRequests = maxRequests;
+    }
+
+    public String getApiBaseUrl() {
+        return apiBaseUrl;
+    }
+
+    public int getTimeout() {
+        return timeout;
+    }
+
+    public List<String> getAllowListHeaders() {
+        return allowListHeaders;
+    }
+
+    public List<String> getDenyListHeaders() {
+        return denyListHeaders;
+    }
+
+    public String getApiSecret() {
+        return apiSecret;
+    }
+
+    /**
+     * Gets the App Id, when it exists
+     *
+     * @return A string representing the AppID
+     * @throws CastleRuntimeException when there is no App Id
+     */
+    public String getCastleAppId() throws CastleRuntimeException {
+        if (castleAppId == null || castleAppId.isEmpty()) {
+            throw new CastleRuntimeException("AppId was not specified");
+        } else {
+            return castleAppId;
+        }
+    }
+
+    public CastleBackendProvider getBackendProvider() {
+        return backendProvider;
+    }
+
+    public boolean isLogHttpRequests() {
+        return logHttpRequests;
+    }
+
+    public List<String> getIpHeaders() {
+        return ipHeaders;
+    }
+
+    public int getMaxRequests() {
+        return maxRequests;
+    }
+}

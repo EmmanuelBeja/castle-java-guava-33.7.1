@@ -1,0 +1,385 @@
+package io.castle.client.internal.config;
+
+import com.google.common.base.Joiner;
+import com.google.common.collect.ImmutableList;
+import io.castle.client.internal.backend.CastleBackendProvider;
+import io.castle.client.internal.utils.HeaderNormalizer;
+import io.castle.client.model.CastleSdkConfigurationException;
+
+import java.time.Duration;
+import java.util.LinkedList;
+import java.util.List;
+
+/**
+ * Allows to programmatically create and validate a castleConfiguration through a DSL.
+ * <p>
+ * CastleConfigurationBuilder has methods for creating a castleConfiguration instance from scratch.
+ * Furthermore, there are also methods for creating a configuration from sensible default values.
+ * The fields that can be set in a CastleConfiguration:
+ * <ul>
+ * <li> timeout
+ * <li> allowListHeaders
+ * <li> denyListHeaders
+ * <li> apiSecret
+ * <li> castleAppId
+ * <li> backendProvider
+ * </ul>
+ * The {@code build} method provides a layer of validation.
+ * It will throw a {@link CastleSdkConfigurationException} if one of the fields is left unset.
+ * {@code apiSecret} and {@code castleAppId} do not have defaults.
+ * A value for the Api Secret should be provided before calling {@code  build}.
+ * <h2>How to use AllowList and DenyList</h2>
+ * When {@link io.castle.client.Castle#onRequest} is called, allowListed headers and denyListed headers are checked.
+ * Headers are only passed to the context if they are in the allowList, but not in the denyList.
+ * That is, if a header is in both lists, the denyListed value takes precedence, and the header is not passed to the
+ * context object.
+ */
+public class CastleConfigurationBuilder {
+    /**
+     * Milliseconds applied to connect, read, and write for each request.
+     */
+    private int timeout = 1000;
+
+    /**
+     * Strings representing headers that should be passed to the context object unless they are also denyListed.
+     */
+    private List<String> allowListHeaders;
+
+    /**
+     * Strings representing headers that should never be passed to the context object.
+     */
+    private List<String> denyListHeaders;
+
+    /**
+     * String represented the API secret associated with a Castle account.
+     */
+    private String apiSecret;
+
+    /**
+     * String representing an AppID associated with a Castle account.
+     */
+    private String castleAppId;
+
+    /**
+     * The HTTP layer chosen to make requests.
+     */
+    private CastleBackendProvider backendProvider = CastleBackendProvider.OKHTTP; //Unique available backend on the current version
+
+    /**
+     * Base URL of the API calls. Used for tests, on productions use the default value.
+     */
+    private String apiBaseUrl;
+
+    /**
+     * Flag to enable logging of backend HTTP requests.
+     */
+    private boolean logHttpRequests = false;
+
+    /**
+     * Sorted list of headers to use for IP value in context
+     */
+    private List<String> ipHeaders;
+
+    /**
+     * Max number of simultaneous requests to Castle
+     */
+    private int maxRequests = 5;
+
+    private CastleConfigurationBuilder() {
+    }
+
+    /**
+     * Provides a castleConfigurationBuilder with the default values set for all of CastleConfiguration's fields but
+     * apiSecret and castleAppId.
+     * <p>
+     * Values for {@link CastleConfiguration#apiSecret} and {@link CastleConfiguration#castleAppId} must be provided
+     * before calling {@code build}.
+     * These two fields do not have default values.
+     *
+     * @return a castleConfigurationBuilder with all settings set to the default values, when there exist defaults
+     */
+    public static CastleConfigurationBuilder defaultConfigBuilder() {
+        CastleConfigurationBuilder builder = new CastleConfigurationBuilder()
+                .withDefaultAllowList()
+                .withDefaultDenyList()
+                .withDefaultApiBaseUrl()
+                .withTimeout(1000)
+                .withDefaultBackendProvider()
+                .withMaxRequests(5);
+        return builder;
+    }
+
+    /**
+     * Provides a fresh castleConfigurationBuilder.
+     * <p>
+     * The only default value provided is the timeout, which is set to 1000 milliseconds.
+     *
+     * @return a castleConfigurationBuilder with all values set to null, except timeout
+     */
+    public static CastleConfigurationBuilder aConfigBuilder() {
+        return new CastleConfigurationBuilder();
+    }
+
+    /**
+     * Sets the default list of allowListed headers.
+     *
+     * @return a castleConfigurationBuilder instance with the default list of allowListed headers.
+     */
+    public CastleConfigurationBuilder withDefaultAllowList() {
+        this.allowListHeaders = new LinkedList<>();
+        return this;
+    }
+
+    /**
+     * Sets the default list of denyListed headers.
+     * <p>
+     * The default value is {@code Cookie} and {@code Authorization}.
+     *
+     * @return a castleConfigurationBuilder instance with the default list of denyListed headers
+     */
+    public CastleConfigurationBuilder withDefaultDenyList() {
+        this.denyListHeaders = new LinkedList<>();
+        this.denyListHeaders.add("Cookie");
+        this.denyListHeaders.add("Authorization");
+        return this;
+    }
+
+    /**
+     * Sets the connect, read, and write timeout in milliseconds for a request.
+     *
+     * @param timeout milliseconds after which a request times out
+     * @return a castleConfigurationBuilder with a timeout set to a new value
+     */
+    public CastleConfigurationBuilder withTimeout(int timeout) {
+        this.timeout = timeout;
+        return this;
+    }
+
+    /**
+     * Sets the connect, read, and write timeout for a request.
+     *
+     * @param timeout duration after which a request times out
+     * @return a castleConfigurationBuilder with a timeout set to a new value
+     */
+    public CastleConfigurationBuilder withTimeout(Duration timeout) {
+        return withTimeout(Math.toIntExact(timeout.toMillis()));
+    }
+
+    /**
+     * Sets the endpoint of the Castle API to its default value.
+     * <p>
+     * The default value is {@code https://api.castle.io/}.
+     * @return a castleConfigurationBuilder with the default value for the Castle API endpoint
+     */
+    public CastleConfigurationBuilder withDefaultApiBaseUrl() {
+        return this.withApiBaseUrl("https://api.castle.io/");
+    }
+
+    /**
+     * Sets the OkHttp backend for all API calls.
+     *
+     * @return a castleConfigurationBuilder with the backend set to okHttp
+     */
+    public CastleConfigurationBuilder withDefaultBackendProvider() {
+        return this.withBackendProvider(CastleBackendProvider.OKHTTP);
+    }
+
+    /**
+     * Sets a max number of simultaneous requests to the Castle API
+     *
+     * @param maxRequests max number of connections to Castle
+     * @return a castleConfigurationBuilder with a max request count
+     */
+    public CastleConfigurationBuilder withMaxRequests(Integer maxRequests) {
+        this.maxRequests = maxRequests;
+        return this;
+    }
+
+    /**
+     * AllowLists a list of strings representing headers that will be passed to the context object from an
+     * {@code HttpServletRequest}.
+     *
+     * @param allowListedHeaders a list of strings representing headers; case insensitive, not null.
+     * @return a castleConfigurationBuilder with a allowlist of headers for building context objects
+     */
+    public CastleConfigurationBuilder withAllowListHeaders(List<String> allowListedHeaders) {
+        this.allowListHeaders = allowListedHeaders;
+        return this;
+    }
+
+    /**
+     * AllowLists a a comma separated list of string parameters representing headers that will be passed to the context
+     * object from an {@code HttpServletRequest}.
+     *
+     * @param allowListedHeaders a comma separated list of string parameters representing headers; case insensitive, not
+     *                           null.
+     * @return a castleConfigurationBuilder with an allowList of headers for building context objects
+     */
+    public CastleConfigurationBuilder withAllowListHeaders(String... allowListedHeaders) {
+        return withAllowListHeaders(ImmutableList.copyOf(allowListedHeaders));
+    }
+
+    /**
+     * DenyLists a a comma separated list of string parameters representing headers that will be passed to the context
+     * object from an {@code HttpServletRequest}.
+     *
+     * @param denyListedHeaders a comma separated list of string parameters representing headers; case insensitive, not
+     *                           null.
+     * @return a castleConfigurationBuilder with a denyList of headers for building context objects
+     */
+    public CastleConfigurationBuilder withDenyListHeaders(String... denyListedHeaders) {
+        return withDenyListHeaders(ImmutableList.copyOf(denyListedHeaders));
+    }
+
+    /**
+     * DenyLists a list of strings representing headers that will be passed to the context object from an
+     * {@code HttpServletRequest}.
+     *
+     * @param denyListedHeaders a list of strings representing headers; case insensitive, not null.
+     * @return a castleConfigurationBuilder with a denyList of headers for building context objects
+     */
+    public CastleConfigurationBuilder withDenyListHeaders(List<String> denyListedHeaders) {
+        this.denyListHeaders = denyListedHeaders;
+        return this;
+    }
+
+    /**
+     * A string with the API secret associated with a valid Castle account.
+     *
+     * @param apiSecret the API secret of the account calling the Castle API
+     * @return a castleConfigurationBuilder with the API secret set
+     */
+    public CastleConfigurationBuilder withApiSecret(String apiSecret) {
+        this.apiSecret = apiSecret;
+        return this;
+    }
+
+    /* alias for withApiSecret  */
+    public CastleConfigurationBuilder apiSecret(String apiSecret) {
+        return withApiSecret(apiSecret);
+    }
+
+    /**
+     * Validates and returns a configuration object, if all required fields have the required values, or an exception
+     * otherwise.
+     * <p>
+     * Validation consists in checking that no field in the configuration is set tu null.
+     * Furthermore, the build method also makes sure that the API secret is not an empty string.
+     * An additional layer of validation is given further along the line by {@link HeaderNormalizer}, which will ensure
+     * that the provided list of strings can contain both, upper and lower case letters.
+     * This method will not detect wrong headers, API secrets or APP ID's.
+     *
+     * @return a castleConfiguration with all fields set to some meaningful value
+     * @throws CastleSdkConfigurationException if at least one of castleAppId, apiSecret, allowListHeaders,
+     *                                         denyListHeaders, backendProvider is not provided
+     *                                         during the building stage of the
+     *                                         CastleConfiguration instance.
+     */
+    public CastleConfiguration build() throws CastleSdkConfigurationException {
+        ImmutableList.Builder<String> builder = ImmutableList.builder();
+        if (apiSecret == null || apiSecret.isEmpty()) {
+            builder.add("The apiSecret for the castleSDK must be provided in the configuration. Read documentation " +
+                    "for further details.");
+        }
+        if (allowListHeaders == null) {
+            builder.add("An allowList of headers must be provided. If not sure, then use the default values provided " +
+                    "by method withDefaultAllowList. Read documentation for further details.");
+        }
+        if (denyListHeaders == null) {
+            builder.add("A denyList of headers must be provided. If not sure, then use the default values provided " +
+                    "by method withDefaultDenyList. Read documentation for further details.");
+        }
+        if (backendProvider == null) {
+            builder.add("A backend provider must be selected. If not sure, then use the default values provided " +
+                    "by method withDefaultBackendProvider. Read documentation for further details.");
+        }
+        if (apiBaseUrl == null) {
+            builder.add("A apiBaseUrl value must be selected. If not sure, then use the default values provided by method withDefaultApiBaseUrl. Read documentation for further details.");
+        }
+        ImmutableList<String> errorMessages = builder.build();
+        if (!errorMessages.isEmpty()) {
+            throw new CastleSdkConfigurationException(Joiner.on(System.lineSeparator()).join(errorMessages));
+        }
+        HeaderNormalizer normalizer = new HeaderNormalizer();
+        return new CastleConfiguration(apiBaseUrl,
+                timeout,
+                normalizer.normalizeList(allowListHeaders),
+                normalizer.normalizeList(denyListHeaders),
+                apiSecret,
+                castleAppId,
+                backendProvider,
+                logHttpRequests,
+                ipHeaders,
+                maxRequests);
+    }
+
+    /**
+     * Sets a String representing an AppID associated with a Castle account.
+     *
+     * @param castleAppId the AppID for that will be used to make calls to the Castle API
+     * @return a castleConfigurationBuilder with the AppID set
+     */
+    public CastleConfigurationBuilder withCastleAppId(String castleAppId) {
+        this.castleAppId = castleAppId;
+        return this;
+    }
+
+    public CastleConfigurationBuilder appId(String appId) {
+        return withCastleAppId(appId);
+    }
+
+    /**
+     * Sets the HTTP layer that will be used for making calls to the Castle REST API.
+     *
+     * @param backendProvider an available backend provider
+     * @return a castleConfigurationBuilder with the chosen backend provider set
+     */
+    public CastleConfigurationBuilder withBackendProvider(CastleBackendProvider backendProvider) {
+        this.backendProvider = backendProvider;
+        return this;
+    }
+
+    /**
+     * Sets the endpoint of the Castle API.
+     *
+     * @param apiBaseUrl a string representing the URL of the Castle API endpoint without any relative path
+     * @return a castleConfigurationBuilder with the default value for the Castle API endpoint
+     */
+    public CastleConfigurationBuilder withApiBaseUrl(String apiBaseUrl) {
+        this.apiBaseUrl = apiBaseUrl;
+        return this;
+    }
+
+    /**
+     * Flag to enable logging on backend HTTP requests.
+     * When enabled, the {@code Authorization} header is redacted from the log.
+     *
+     * @param logHttpRequests boolean to switch logging on or off.
+     * @return a castleConfigurationBuilder with logging setup set
+     */
+    public CastleConfigurationBuilder withLogHttpRequests(Boolean logHttpRequests) {
+        this.logHttpRequests = logHttpRequests;
+        return this;
+    }
+
+    /* alias for logHttpRequests */
+    public CastleConfigurationBuilder enableHttpLogging(Boolean logHttpRequests) {
+        return withLogHttpRequests(logHttpRequests);
+    }
+
+    /**
+     * Sorted list of headers to use when extracting IP from headers.
+     *
+     * @param ipHeaders sorted list of headers.
+     * @return a castleConfigurationBuilder with IP headers set
+     */
+    public CastleConfigurationBuilder withIPHeaders(List<String> ipHeaders) {
+        this.ipHeaders = ipHeaders;
+        return this;
+    }
+
+    /* alias for withIPHeaders */
+    public CastleConfigurationBuilder ipHeaders(List<String> ipHeaders) {
+        return withIPHeaders(ipHeaders);
+    }
+}
